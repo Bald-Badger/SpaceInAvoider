@@ -1,6 +1,17 @@
 # SpaceInvader
 this is my personal repo to build a toy TCAS system around my raspberry pi based on stratux ADS-B system
 
+## sudo overlayctl disable
+sudo reboot
+
+## make persistent image changes
+
+sudo overlayctl enable
+sudo reboot
+
+## test protected behavior
+df -h /overlay/rwdata
+
 ## Pi setup
 
 Run persistent Stratux/Raspberry Pi setup from the Pi:
