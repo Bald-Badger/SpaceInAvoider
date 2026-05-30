@@ -56,26 +56,6 @@ Stratux status:
 - ADS-B weather/METAR comes from 978 MHz UAT/FIS-B, not 1090ES.
 - Weather may not show indoors or on the ground unless the receiver can hear ADS-B ground stations and UAT broadcasts.
 
-Filesystem/storage issue:
-- The SD card is large and the rootfs partition is expanded.
-- `lsblk -f` showed:
-  - `/dev/mmcblk0p1` mounted at `/boot/firmware`
-  - `/dev/mmcblk0p2` ext4 `rootfs` with about 54.8G free, mounted at `/overlay/robase` and `/overlay/pivot`
-- But `/` shows only a small writable overlay:
-  `df -h /`
-  output roughly:
-  `overlay 250M ... /`
-- This means Stratux uses an overlay filesystem. The big rootfs is mounted read-only at `/overlay/robase`, while `/` is a small writable overlay.
-- Attempting to create `/overlay/robase/data/...` failed:
-  `mkdir: cannot create directory ‘/overlay/robase/data’: Read-only file system`
-- Need to either:
-  1. remount `/overlay/robase` read/write if safe, or
-  2. create a separate writable persistent data partition, or
-  3. increase/modify the overlay writable layer, or
-  4. use external/local development workflow instead of installing large tools on Stratux.
-- VS Code Server could not fit easily because `~/.vscode-server` lands in the small 250 MB overlay.
-- Safer workflow is to keep project source code on local Windows machine and sync/mount it to the Pi.
-
 Local development workflow:
 - I want to use Codex/VS Code from my local computer, because Stratux itself may not have internet access.
 - Codex should run on my laptop/desktop with internet, while code is synced or mounted to the Pi.
@@ -83,15 +63,6 @@ Local development workflow:
   1. VS Code Remote SSH: easy, but needs VS Code Server installed on the Pi, which runs into overlay space limits.
   2. SSHFS-Win on Windows: mount Pi directory as a drive, then use local VS Code/Codex.
   3. VS Code SFTP extension: keep code local and upload-on-save to Pi.
-- SSHFS-Win setup:
-  - Install WinFsp and SSHFS-Win.
-  - With winget:
-    `winget install WinFsp.WinFsp`
-    `winget install SSHFS-Win.SSHFS-Win`
-  - Reboot Windows.
-  - Mount example:
-    `net use X: \\sshfs.r\pi@192.168.10.1\home\pi`
-  - `.r` means root-relative path, so `/home/pi`.
 - Issue found:
   Running `bash` from PowerShell while current directory is `X:\` gives:
   `wsl: Failed to translate 'X:\'`
@@ -114,14 +85,16 @@ Current local repo/code state:
   - `code/helper/gps_helper.py`: tries gpsd first, then falls back to Stratux `/getSituation`; normalizes fix, GPS track, and groundspeed.
   - `code/helper/metar_helper.py`: standard-library Stratux `/weather` WebSocket client, extracts METAR/SPECI messages, parses altimeter setting and rough VFR/MVFR/IFR/LIFR category.
   - `code/__init__.py` and `code/helper/__init__.py`: package markers only.
-  - `scripts/setup_pi_overlay.sh`: sudo-run Pi setup script for persistent changes on the Stratux overlay filesystem.
-  - `scripts/project_python.sh`: wrapper that runs `.venv/bin/python`.
-  - `scripts/project_pip.sh`: wrapper that runs `.venv/bin/python -m pip`.
+  - `code/helper/display_helper.py`: pygame helper with `draw_circle_demo()` and a CLI for drawing a simple circle on the display. It first tries a real SDL/pygame display, then can fall back to rendering with pygame into a surface and writing the pixels directly to `/dev/fb0`.
+  - `code/helper/audio_helper.py`: pygame mixer helper that plays the default `audio/airbus_retard_retard.wav` callout.
+  - `audio/airbus_retard_retard.wav`: first cockpit meme/test callout audio clip.
+  - `audio/SOURCES.md`: source and licensing notes for audio assets.
+  - The previous `scripts/` setup helpers were intentionally removed by the user on 2026-05-29. Do not recreate them unless explicitly requested.
 - There is not yet a main runnable display/audio app, packaging config, dependency file, or automated test suite.
 - The helper modules intentionally avoid third-party dependencies so they can run on a constrained Stratux install.
 - `traffic_helper.py` and `metar_helper.py` currently each include a small local WebSocket reader; consider sharing it later if this grows.
 - Verification from scan: `python3 -m compileall -q code` passes.
-- Git status from scan: `AGENTS.md`, `README.md`, `code/`, and `scripts/` are untracked/modified in the local workspace.
+- Git status from scan: tracked scripts are deleted in the local workspace, and `AGENTS.md`/`README.md` have been updated to reflect that current state.
 
 Desired project functions:
 1. Traffic display / toy TCAS
@@ -251,6 +224,13 @@ Data sources and integration:
      - BMP5xx is newer and high-performance.
      - BMP390/BMP388 are older but easier/more common.
      - For this project, BMP581 is good; bigger errors will come from calibration, cabin/static pressure, heat, venting, and runway elevation reference.
+   - Temperature/humidity sensor idea:
+     - Adding a temperature/humidity sensor can make sense, but mainly as a refinement rather than the primary accuracy source.
+     - Pressure-to-altitude conversion depends on the air column temperature profile and, to a smaller degree, humidity. A local temp/humidity reading can support a more realistic density/virtual-temperature correction than assuming standard atmosphere.
+     - This is workable for improving trends and reducing some model error, especially for relative altitude/VSI and local field-elevation calibration.
+     - It will not turn this into radar altitude or certified altitude. Larger errors will still come from static pressure sampling, sensor placement, cabin pressure effects, heat from the Pi/enclosure, calibration timing, QNH/METAR age, and runway/airport elevation reference.
+     - If added, place the temp/humidity sensor near the baro static chamber but thermally isolated from the Pi, sun-heated enclosure walls, speaker, display/power-bank heat, and fan exhaust.
+     - Practical sensors to consider later: Sensirion SHT31/SHT4x or Bosch BME280/BME688. Avoid relying on BME280 pressure as the primary pressure source if BMP581 is available; use it mostly for temperature/humidity.
 
 4. Baro calibration and altitude logic
    - Baro sensor measures pressure, not true altitude.
@@ -260,6 +240,7 @@ Data sources and integration:
      - GPS = rough absolute position/speed/track and slow drift sanity check.
      - airport/runway elevation database = reference for AGL estimate.
      - METAR altimeter setting = optional slow correction.
+     - optional temperature/humidity sensor = small correction for air-density/virtual-temperature modeling, not a replacement for calibration.
      - physical CAL button = best practical calibration.
    - Recommended modes:
      1. Manual QNH mode: enter altimeter setting like 29.92/30.01.
@@ -401,39 +382,39 @@ Internet access for Stratux:
 - For development, AP+Client or external sync is okay.
 
 Persistent Pi setup:
-- Added `scripts/setup_pi_overlay.sh` on 2026-05-29.
-- It should be run on the Pi with:
-  `sudo bash /rwbase/playground/SpaceInvader/scripts/setup_pi_overlay.sh`
-- Purpose: centralize setup steps that need to survive the Stratux overlay filesystem. Normal live-root installs can disappear after reboot.
-- Standing dependency rule from user on 2026-05-29: whenever a Python module is missing during development, update `scripts/setup_pi_overlay.sh` so the module is installed by setup instead of only installing it manually.
-- Dependency install convention:
-  - Add OS packages needed by Python modules to `SYSTEM_APT_PACKAGES`.
-  - Add PyPI modules to `PYTHON_PIP_PACKAGES`.
-  - PyPI modules install into project venv `${PROJECT_ROOT}/.venv`, which should live under `/rwbase/playground/SpaceInvader` and survive reboot.
-  - Do not use system `pip install`; Raspberry Pi OS/Bookworm-style Python may reject it with `externally-managed-environment`/PEP 668.
-  - Run project Python with `source /rwbase/playground/SpaceInvader/.venv/bin/activate`, `scripts/project_python.sh`, or `scripts/project_pip.sh`.
-- Current setup dependencies:
-  - apt: `ca-certificates`, `python3-venv`
-  - pip/project venv: `pygame-ce>=2.5` for the first fullscreen HDMI renderer; import it as `pygame`.
-- Current first setup action: install Argon ONE fan control using the official installer:
-  `curl https://download.argon40.com/argon1.sh | bash`
-- Script behavior:
-  - requires root/sudo
-  - logs to `setup-logs/`
-  - checks the Pi clock before apt operations using `http://deb.debian.org/debian/`; if the clock is more than 5 minutes off, it sets the live system clock from the HTTP `Date` header
-  - supports persistent apt package installs via `SYSTEM_APT_PACKAGES`
-  - always creates/updates the dedicated project `.venv`
-  - supports persistent project-venv Python module installs via `PYTHON_PIP_PACKAGES`
-  - detects whether `/` is an overlay filesystem
-  - remounts `/overlay/robase` read-write when available
-  - bind-mounts `/dev`, `/proc`, `/sys`, `/run`, `/boot/firmware`, and `/etc/resolv.conf` for a chroot install into `/overlay/robase`
-  - also applies the Argon installer to the live overlay for the current boot
-  - remounts `/overlay/robase` read-only again when possible
-  - recommends rebooting after persistent setup
-- Runtime issue seen from `scripts/temp.log`: apt failed with `Release file ... is not valid yet` because the Pi clock was about 3 days behind repository metadata. The setup script now corrects clock skew before running `apt-get update`.
-- Runtime issue seen from `scripts/temp.log`: after clock repair, apt failed with `dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'`. The setup script now runs `dpkg --configure -a` noninteractively in both the persistent chroot and live root before apt installs.
-- Runtime issue seen from `scripts/temp.log`: installing `python3-full` pulled Python docs/examples/IDLE/Tk and filled the small live overlay with `No space left on device`. The setup script now uses `python3-venv` only, installs apt packages with `--no-install-recommends`, and purges heavy packages from the earlier `python3-full` attempt.
-- Runtime issue seen from `scripts/temp.log`: live `dpkg --configure -a` tried to configure half-installed `python3-full` debris before purge and failed on `python3-doc` missing `python3.11-doc`. The setup script now purges unwanted packages before dpkg repair, and treats dpkg repair failure as recoverable so apt purge/install can continue.
+- Setup script was restarted from scratch on 2026-05-30 at user request.
+- User must manually disable overlay protection and reboot before running setup:
+  - `sudo overlayctl disable`
+  - `sudo reboot`
+- Current setup script:
+  - path: `scripts/setup_pi_overlay.sh`
+  - must be run as root with overlay disabled
+  - refuses to run if `/` is still mounted as filesystem type `overlay`
+  - step 1: checks/corrects the Pi system clock using the HTTP `Date` header from `http://deb.debian.org/debian/`, because apt may fail with `Release file ... is not valid yet` if the Pi clock is behind
+  - step 2: runs `apt-get update`, `apt-get upgrade -y`, `apt-get autoremove -y`, and `apt-get clean`
+  - step 3: skips Argon ONE driver install for now; `install_argon_one_driver` remains in the script, but the call is commented out
+  - step 4: installs `python3-full` and `python3-pygame` with apt
+  - step 5: creates/updates project virtual environment at `.venv` with `--system-site-packages`
+- All project Python should run inside `.venv`, not directly against system Python:
+  - activate with `source /rwbase/playground/SpaceAvoider/.venv/bin/activate`
+  - then use `python ...` or `python -m pip ...`
+- Display dependency note:
+  - pip `pygame-ce` 2.5.7 on the Stratux Pi only exposed SDL `offscreen` and `dummy` drivers during testing, so it could not draw to HDMI.
+  - apt `python3-pygame` through the venv uses the system SDL stack, but this Stratux image still reported `kmsdrm not available` and no visible `linuxfb` driver.
+  - `display_helper.py` now keeps pygame as the drawing library while falling back to direct `/dev/fb0` writes when SDL cannot open HDMI.
+- Audio dependency note:
+  - `audio_helper.py` uses `pygame.mixer`, so no setup-script dependency change was needed after `python3-pygame` was installed.
+  - `aplay -l` showed HDMI as card 0 and the 3.5 mm jack as card 1 `Headphones`.
+  - SDL/pygame names the headphone output `bcm2835 Headphones, bcm2835 Headphones`.
+  - `audio_helper.py` defaults to that headphone-jack device; use `--system-default` only when intentionally testing the Pi default output.
+  - Verified on the Pi with `python -m code.helper.audio_helper --volume 0.8`; it started playback successfully through the headphone device.
+- After setup, user manually re-enables overlay protection and reboots:
+  - `sudo overlayctl enable`
+  - `sudo reboot`
+- Historical note from earlier setup script work:
+  - The Pi clock can be behind after boot, causing apt errors like `Release file ... is not valid yet`.
+  - `python3-full` was too large for the small live overlay when overlay was enabled because it pulls docs/examples/IDLE/Tk. New workflow avoids that by requiring overlay disabled before running.
+  - Prefer a project `.venv` for Python modules and avoid system `pip install` on externally managed Python.
 
 Important safety/human factors:
 - This project must not distract during actual flight training.
@@ -464,6 +445,9 @@ Near-term implementation plan:
    - traffic symbols
    - relative altitude labels
    - threat color/size
+   - First pygame smoke test can run with:
+     `python -m code.helper.display_helper --seconds 30`
+   - `display_helper.py` defaults to fullscreen and uses SDL `kmsdrm` when no desktop `DISPLAY`/`WAYLAND_DISPLAY` exists; if SDL cannot open a visible console display, it falls back to pygame Surface rendering plus direct `/dev/fb0` output. Force that path with `--backend fb0`.
 4. Add audio:
    - local `.wav` files
    - play with pygame mixer

@@ -1,46 +1,78 @@
-# SpaceInvader
-this is my personal repo to build a toy TCAS system around my raspberry pi based on stratux ADS-B system
+# SpaceAvoider
 
-## sudo overlayctl disable
+Personal Raspberry Pi / Stratux toy traffic-awareness and avionics-display project.
+
+## Persistent Pi Setup
+
+Persistent Stratux/Raspberry Pi setup starts by manually disabling overlay
+protection and rebooting.
+
+Disable overlay protection, then reboot:
+
+```bash
+sudo overlayctl disable
 sudo reboot
+```
 
-## make persistent image changes
+Run the setup script:
 
+```bash
+cd /rwbase/playground/SpaceAvoider
+sudo bash scripts/setup_pi_overlay.sh
+```
+
+The setup script currently:
+
+1. Checks/corrects the Pi system clock using the HTTP `Date` header from `http://deb.debian.org/debian/`.
+2. Runs `apt-get update`, `apt-get upgrade -y`, `apt-get autoremove -y`, and `apt-get clean`.
+3. Skips the Argon ONE driver install for now; the installer call is left commented in the setup script.
+4. Installs `python3-full` and Raspberry Pi/Debian `python3-pygame`.
+5. Creates/updates the project Python virtual environment at `.venv` with system site packages enabled.
+
+All project Python should run from `.venv`, not directly from system Python:
+
+```bash
+source /rwbase/playground/SpaceAvoider/.venv/bin/activate
+python -c "import sys, pygame; print(sys.executable); print(pygame.version.ver)"
+```
+
+The display helper uses `pygame` from the system package through the venv.
+On this Stratux Pi, SDL may not expose a visible console video driver, so the
+helper can also render with pygame into an in-memory surface and write the
+result directly to `/dev/fb0`.
+
+Run the first pygame display helper:
+
+```bash
+cd /rwbase/playground/SpaceAvoider
+source .venv/bin/activate
+python -m code.helper.display_helper --seconds 30
+```
+
+Force the direct framebuffer path if SDL display setup fails:
+
+```bash
+python -m code.helper.display_helper --backend fb0 --seconds 30
+```
+
+Play the first audio callout helper:
+
+```bash
+python -m code.helper.audio_helper --volume 0.8
+```
+
+The audio helper defaults to the Raspberry Pi headphone jack:
+`bcm2835 Headphones, bcm2835 Headphones`.
+
+Re-enable overlay protection, then reboot:
+
+```bash
 sudo overlayctl enable
 sudo reboot
+```
 
-## test protected behavior
+Check protected overlay behavior:
+
+```bash
 df -h /overlay/rwdata
-
-## Pi setup
-
-Run persistent Stratux/Raspberry Pi setup from the Pi:
-
-```bash
-sudo bash /rwbase/playground/SpaceInvader/scripts/setup_pi_overlay.sh
-```
-
-The setup script is designed for the Stratux overlay filesystem. It applies
-changes to the live root for the current boot and to `/overlay/robase` so they
-survive reboot.
-
-When a project Python module is missing, add it to `PYTHON_PIP_PACKAGES` in the
-setup script. If that module needs system libraries, add the matching apt
-packages to `SYSTEM_APT_PACKAGES`.
-
-The first project renderer dependency is `pygame-ce`, installed into
-`.venv`. Import it from Python as `pygame`.
-
-Use the project virtual environment instead of system Python:
-
-```bash
-source /rwbase/playground/SpaceInvader/.venv/bin/activate
-python -c "import pygame; print(pygame.version.ver)"
-```
-
-Or run through the wrappers:
-
-```bash
-/rwbase/playground/SpaceInvader/scripts/project_python.sh -c "import pygame; print(pygame.version.ver)"
-/rwbase/playground/SpaceInvader/scripts/project_pip.sh list
 ```
